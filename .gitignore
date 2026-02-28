@@ -23,8 +23,7 @@ logs/
 *.log
 
 # Data
-data/output/*.json
-data/status.json
+data/
 
 # Environment
 .env
