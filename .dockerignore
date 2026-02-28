@@ -27,9 +27,8 @@ logs/
 *.log
 
 # Data (保留空目录结构)
-data/output/*
-data/status.json
-!data/output/.gitkeep
+data/*
+!data/*/.gitkeep
 
 # Environment
 .env
