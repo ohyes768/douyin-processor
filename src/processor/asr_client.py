@@ -44,23 +44,23 @@ class AliyunASRClient:
         """识别音频文件
 
         Args:
-            audio_file: 音频文件路径
+            audio_file: 音频文件路径（可选，仅用于日志）
             file_url: 音频文件的公网 URL
             format: 音频格式
 
         Returns:
             转写结果对象，失败返回 None
         """
-        audio_path = Path(audio_file)
+        logger.info(f"开始识别音频: {file_url}")
 
-        if not audio_path.exists():
-            logger.error(f"音频文件不存在: {audio_file}")
-            return None
-
-        logger.info(f"开始识别音频: {audio_file}")
+        # 如果传入了本地文件路径，检查是否存在（可选）
+        if audio_file:
+            audio_path = Path(audio_file)
+            if not audio_path.exists():
+                logger.warning(f"本地音频文件不存在: {audio_file}，但将继续使用 URL 进行识别")
 
         try:
-            # 第一步：提交 ASR 任务
+            # 提交 ASR 任务
             task_id = await self._submit_task([file_url])
 
             if not task_id:
@@ -69,7 +69,7 @@ class AliyunASRClient:
 
             logger.info(f"ASR 任务已提交，任务 ID: {task_id}")
 
-            # 第二步：轮询查询结果
+            # 轮询查询结果
             result = await self._wait_for_result(task_id)
 
             if result:

@@ -74,15 +74,20 @@ class FileSystemClient:
                     videos = []
 
                     for item in data.get("videos", []):
-                        # 从文件名提取 aweme_id（假设格式为 xxx.mp4）
+                        # 从文件名提取 aweme_id（格式为 xxx.wav）
                         filename = item.get("filename", "")
-                        aweme_id = filename.replace(".mp4", "")
+                        aweme_id = filename.replace(".wav", "")
+
+                        # 获取 URL，如果是相对路径则拼接 base_url
+                        url = item.get("url", "")
+                        if url and not url.startswith("http"):
+                            url = f"{self.base_url}{url}"
 
                         videos.append(VideoFile(
                             aweme_id=aweme_id,
                             filename=filename,
                             size=item.get("size", 0),
-                            url=item.get("url", "")
+                            url=url
                         ))
 
                     logger.info(f"获取到 {len(videos)} 个视频")
@@ -146,17 +151,3 @@ class FileSystemClient:
         except Exception as e:
             logger.error(f"视频下载异常: {e}")
             return None
-
-    async def get_video_url(self, aweme_id: str) -> Optional[str]:
-        """获取视频的公网 URL（用于 ASR）
-
-        Args:
-            aweme_id: 视频 ID
-
-        Returns:
-            视频 URL，失败返回 None
-        """
-        # 假设 file-system-go 提供了获取文件 URL 的接口
-        # 如果没有，则需要根据实际情况调整
-        url = f"{self.base_url}/audio/{aweme_id}.mp4"
-        return url

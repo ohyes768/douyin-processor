@@ -6,19 +6,20 @@
 douyin-processor 是服务器端视频处理服务，负责从 file-system-go 获取已上传的视频文件，提取音频并进行 ASR（自动语音识别）处理，最终将识别结果保存到本地文件系统供查询。
 
 ### 1.2 目标
-- **核心目标**：从 file-system-go 获取视频 → 提取音频 → ASR识别 → 保存结果
+- **核心目标**：从 file-system-go 获取 WAV 音频 URL → 直接调用 ASR 识别 → 保存结果
 - **附加目标**：提供 API 接口供 n8n 和前端查询处理状态和结果
-- **非目标**：不负责视频采集（由 douyin-collector 负责）
+- **非目标**：不负责视频采集和音频转换（由 douyin-collector 负责）
 
 ### 1.3 项目关系
 ```
 douyin-collector (Windows 客户端)
-    ↓ 上传视频
+    ↓ 采集视频 → 转换为 WAV → 上传 WAV
 file-system-go (ECS 文件服务器)
-    ↓ 提供视频
+    ↓ 存储 WAV，提供公网 URL
 douyin-processor (Linux 服务器)
-    ↓ 返回结果
+    ↓ 使用 URL 调用 ASR
 n8n / 前端
+    ↓ 获取识别结果
 ```
 
 ### 1.4 网关对接
@@ -31,12 +32,11 @@ n8n / 前端
 
 | 功能 | 优先级 | 描述 |
 |------|--------|------|
-| 视频列表获取 | P0 | 从 file-system-go 获取视频列表 |
-| 视频下载 | P0 | 下载视频文件到本地临时目录 |
-| 音频提取 | P0 | 使用 FFmpeg 从视频中提取音频 |
-| ASR识别 | P0 | 调用阿里云 ASR 进行语音识别 |
+| 音频列表获取 | P0 | 从 file-system-go 获取 WAV 音频列表 |
+| URL 拼接 | P0 | 将相对路径拼接为完整公网 URL |
+| ASR识别 | P0 | 直接使用 URL 调用阿里云 ASR |
 | 结果保存 | P0 | 将识别结果保存到本地文件 |
-| 状态管理 | P1 | 记录视频处理状态到 JSON 文件 |
+| 状态管理 | P1 | 记录音频处理状态到 JSON 文件 |
 | 结果查询 | P1 | 提供 API 查询处理结果 |
 
 ### 2.2 用户故事
@@ -44,16 +44,17 @@ n8n / 前端
 ```
 n8n 工作流
     → 调用 POST /api/process
-    → douyin-processor 获取视频列表
-    → 逐个下载视频
-    → 提取音频并进行 ASR 识别
+    → douyin-processor 获取 WAV 音频列表
+    → 逐个处理音频
+    → 拼接完整 URL（公网可访问）
+    → 直接使用 URL 调用 ASR 识别
     → 保存结果到 data/output/
     → 更新状态到 data/status.json
     → 完成
 
 前端用户
     → 调用 GET /api/videos/{id}/result
-    → 获取指定视频的 ASR 识别结果
+    → 获取指定音频的 ASR 识别结果
     → 展示给用户
 ```
 
@@ -66,11 +67,11 @@ n8n 工作流
 | Python | 3.12+ | 主要开发语言 |
 | FastAPI | 最新版 | Web 框架 |
 | uvicorn | 最新版 | ASGI 服务器 |
-| httpx | 最新版 | HTTP 客户端（调用 file-system-go） |
-| ffmpeg-python | 最新版 | 音频提取 |
+| httpx | 最新版 | HTTP 客户端（调用外部服务） |
 | PyYAML | 最新版 | 配置文件解析 |
 | Loguru | 最新版 | 日志管理 |
 | uv | 最新版 | Python 包管理工具 |
+| Docker | 最新版 | 容器化部署 |
 
 ### 3.2 架构设计
 
@@ -92,13 +93,13 @@ n8n 工作流
                               │
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                    Video Processor                           │
+│                    Audio Processor                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  获取视频列表 │  │  下载视频     │  │  提取音频     │      │
+│  │  获取音频列表 │  │  拼接 URL     │  │  ASR识别     │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  ASR识别     │  │  保存结果     │  │  更新状态     │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  ┌──────────────┐  ┌──────────────┐                        │
+│  │  保存结果     │  │  更新状态     │                        │
+│  └──────────────┘  └──────────────┘                        │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ↓
@@ -106,6 +107,7 @@ n8n 工作流
 │              External Services                               │
 │  ┌──────────────┐  ┌──────────────┐                         │
 │  │file-system-go│  │  阿里云 ASR   │                         │
+│  │  (WAV存储)   │  │  (URL识别)   │                         │
 │  └──────────────┘  └──────────────┘                         │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -168,34 +170,23 @@ app:
   server:
     host: "0.0.0.0"
     port: 8093
-    max_file_size: 104857600  # 100MB
 
   # file-system-go 配置
   filesystem:
-    base_url: "http://localhost:8000"
+    base_url: "http://file-system-go:8000"
     query_endpoint: "/api/videos/query"
-    download_endpoint: "/api/videos/{id}/download"
-    timeout: 300
+    timeout: 30
 
   # 文件配置
   files:
-    temp_dir: "data/temp"
     output_dir: "data/output"
     status_file: "data/status.json"
-
-  # 音频配置
-  audio:
-    output_format: "wav"
-    sample_rate: 16000
-    channels: 1
 
   # ASR配置
   asr:
     provider: "aliyun"
-    access_key: "${ALIYUN_ACCESS_KEY}"
-    access_secret: "${ALIYUN_ACCESS_SECRET}"
-    region: "cn-hangzhou"
-    app_key: "${ALIYUN_ASR_APP_KEY}"
+    model: "fun-asr"
+    access_key: "ALIYUN_ACCESS_KEY"
 
   # 日志配置
   logging:
@@ -331,8 +322,7 @@ Content-Type: application/json
 | 场景 | 处理策略 |
 |------|----------|
 | file-system-go 不可达 | 返回错误，不启动处理 |
-| 视频下载失败 | 标记为失败，继续处理下一个 |
-| 音频提取失败 | 标记为失败，继续处理下一个 |
+| URL 为空或无效 | 标记为失败，继续处理下一个 |
 | ASR 识别失败 | 标记为失败，继续处理下一个 |
 | 磁盘空间不足 | 记录日志，停止处理 |
 
@@ -435,29 +425,31 @@ douyin-processor/
 │   ├── server/
 │   │   ├── __init__.py
 │   │   ├── main.py         # FastAPI 服务器
-│   │   ├── endpoints.py    # API 接口
-│   │   └── models.py       # API 数据模型
+│   │   └── endpoints.py    # API 接口
 │   ├── processor/
 │   │   ├── __init__.py
-│   │   ├── audio_extractor.py  # 音频提取（复用）
-│   │   ├── asr_client.py       # ASR 客户端（复用）
-│   │   ├── video_processor.py  # 视频处理器（新建）
-│   │   ├── status_manager.py   # 状态管理（新建）
-│   │   └── filesystem_client.py # file-system-go 客户端（新建）
-│   ├── models.py           # 数据模型（复用）
-│   └── utils.py            # 工具函数（复用）
+│   │   ├── asr_client.py       # ASR 客户端
+│   │   ├── video_processor.py  # 音频处理器
+│   │   ├── status_manager.py   # 状态管理
+│   │   └── filesystem_client.py # file-system-go 客户端
+│   ├── models.py           # 数据模型
+│   └── utils.py            # 工具函数
 ├── scripts/
-│   ├── run.sh              # Linux 启动脚本
-│   └── install_deps.sh     # 依赖安装
+│   └── deploy.sh           # 部署脚本
 ├── config/
 │   └── app.yaml            # 应用配置
+├── docs/
+│   ├── API接口文档.md       # API 文档
+│   ├── 数据字典.md          # 数据字典
+│   └── 部署指南.md          # 部署文档
 ├── data/
-│   ├── temp/               # 临时文件
 │   ├── output/             # 输出目录
 │   └── status.json         # 状态文件
 ├── logs/                   # 日志目录
 ├── main.py                 # 主入口
 ├── pyproject.toml          # 项目配置
+├── Dockerfile              # Docker 配置
+├── docker-compose.yml      # Docker 编排
 └── README.md
 ```
 
@@ -469,16 +461,13 @@ n8n 工作流
     ├─→ POST /api/process
     │       │
     │       ├─→ file-system-go: POST /api/videos/query
-    │       │   返回视频列表
+    │       │   返回 WAV 音频列表
     │       │
-    │       ├─→ 逐个处理视频
+    │       ├─→ 逐个处理音频
     │       │   │
-    │       │   ├─→ file-system-go: GET /api/videos/{id}/download
-    │       │   │   下载视频
+    │       │   ├─→ 拼接完整 URL（base_url + relative_url）
     │       │   │
-    │       │   ├─→ 提取音频 (FFmpeg)
-    │       │   │
-    │       │   ├─→ ASR 识别 (阿里云)
+    │       │   ├─→ ASR 识别（传入公网 URL）
     │       │   │
     │       │   ├─→ 保存结果到 data/output/{aweme_id}.json
     │       │   │
@@ -502,6 +491,7 @@ n8n 工作流
 
 ---
 
-**文档版本**: v1.0
+**文档版本**: v1.1
 **创建时间**: 2026-02-27
-**状态**: ✅ 已确认，准备开发
+**更新时间**: 2026-02-28
+**状态**: ✅ 架构已优化，直接使用 URL 进行 ASR 识别

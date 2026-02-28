@@ -6,16 +6,18 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 from loguru import logger
 
 from src.server.endpoints import router, set_processor
 from src.processor.filesystem_client import FileSystemClient
-from src.processor.audio_extractor import AudioExtractor
 from src.processor.asr_client import AliyunASRClient
 from src.processor.status_manager import StatusManager
 from src.processor.video_processor import VideoProcessor
 from src.utils import load_config, setup_logger
 
+# 加载 .env 文件
+load_dotenv()
 
 # 加载配置
 config = load_config("config/app.yaml")
@@ -45,13 +47,6 @@ async def lifespan(app: FastAPI):
         timeout=filesystem_config.get("timeout", 300)
     )
 
-    audio_config = app_config.get("audio", {})
-    audio_extractor = AudioExtractor(
-        cache_dir=app_config.get("files", {}).get("temp_dir", "data/temp"),
-        sample_rate=audio_config.get("sample_rate", 16000),
-        channels=audio_config.get("channels", 1)
-    )
-
     asr_config = app_config.get("asr", {})
     asr_client = AliyunASRClient(
         api_key=os.getenv(asr_config.get("access_key", ""), ""),
@@ -65,11 +60,9 @@ async def lifespan(app: FastAPI):
 
     video_processor = VideoProcessor(
         filesystem_client=filesystem_client,
-        audio_extractor=audio_extractor,
         asr_client=asr_client,
         status_manager=status_manager,
-        output_dir=files_config.get("output_dir", "data/output"),
-        temp_dir=files_config.get("temp_dir", "data/temp")
+        output_dir=files_config.get("output_dir", "data/output")
     )
 
     # 设置到全局

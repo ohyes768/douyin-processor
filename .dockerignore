@@ -18,18 +18,33 @@ venv/
 *.swp
 *.swo
 
+# Git
+.git/
+.gitignore
+
 # Logs
 logs/
 *.log
 
-# Data
-data/output/*.json
+# Data (保留空目录结构)
+data/output/*
 data/status.json
+!data/output/.gitkeep
 
 # Environment
 .env
 .env.local
+.env.*.local
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentation
+*.md
+discuss/
+docs/
+
+# Tests
+tests/
+*_test.py
