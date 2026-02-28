@@ -1,0 +1,38 @@
+app:
+  # 服务器配置
+  server:
+    host: "0.0.0.0"
+    port: 8093
+    max_file_size: 104857600  # 100MB
+
+  # file-system-go 配置
+  filesystem:
+    base_url: "http://localhost:8000"
+    query_endpoint: "/api/videos/query"
+    download_endpoint_template: "/api/videos/{id}/download"
+    timeout: 300
+
+  # 文件配置
+  files:
+    temp_dir: "data/temp"
+    output_dir: "data/output"
+    status_file: "data/status.json"
+
+  # 音频配置
+  audio:
+    output_format: "wav"
+    sample_rate: 16000
+    channels: 1
+
+  # ASR配置
+  asr:
+    provider: "aliyun"
+    model: "fun-asr"
+    access_key_env: "ALIYUN_ACCESS_KEY"
+
+  # 日志配置
+  logging:
+    level: "INFO"
+    console: true
+    file: true
+    dir: "logs"
