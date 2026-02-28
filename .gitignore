@@ -29,6 +29,9 @@ data/
 .env
 .env.local
 
+# Docker (本地开发不需要)
+docker-compose.yml
+
 # OS
 .DS_Store
 Thumbs.db
