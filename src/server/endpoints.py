@@ -2,7 +2,8 @@
 API 接口端点
 """
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from pathlib import Path
@@ -35,16 +36,72 @@ class ResultResponse(BaseModel):
     data: Optional[dict] = None
 
 
+class TaskResponse(BaseModel):
+    """任务响应"""
+    success: bool
+    message: str
+    data: Optional[dict] = None
+
+
+@router.post("/api/process/async", response_model=TaskResponse)
+async def process_videos_async():
+    """异步处理所有音频（立即返回，后台处理）"""
+    if processor is None:
+        raise HTTPException(status_code=500, detail="处理器未初始化")
+
+    logger.info("接收到异步处理请求")
+
+    try:
+        # 获取音频列表统计
+        videos = await processor.filesystem_client.get_video_list(
+            filters={"suffix": ".wav"}
+        )
+
+        if not videos:
+            return TaskResponse(
+                success=True,
+                message="没有待处理的音频",
+                data={"total": 0, "pending": 0}
+            )
+
+        # 统计待处理数量
+        pending_count = 0
+        skip_count = 0
+        for video in videos:
+            status = await processor.status_manager.get_status(video.aweme_id)
+            if status is None:
+                pending_count += 1
+            else:
+                skip_count += 1
+
+        # 创建后台任务
+        asyncio.create_task(processor.process_all())
+
+        return TaskResponse(
+            success=True,
+            message="后台处理任务已启动",
+            data={
+                "total": len(videos),
+                "pending": pending_count,
+                "skip": skip_count
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"启动异步任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/process", response_model=ProcessResponse)
 async def process_videos():
-    """处理所有视频"""
+    """同步处理所有音频（等待处理完成）"""
     if processor is None:
         raise HTTPException(status_code=500, detail="处理器未初始化")
 
     logger.info("接收到处理请求")
 
     try:
-        # 异步处理（在后台执行）
+        # 同步处理（等待完成）
         summary = await processor.process_all()
 
         return ProcessResponse(

@@ -10,9 +10,40 @@ douyin-processor 提供 REST API 接口，用于处理 WAV 音频文件的 ASR �
 
 ## 接口列表
 
-### 1. 处理所有音频
+### 1. 异步处理所有音频（推荐）
 
-**描述**：获取 file-system-go 中的所有 WAV 音频，进行 ASR 识别
+**描述**：异步处理所有 WAV 音频，立即返回任务统计信息，后台执行 ASR 识别
+
+**请求**：
+```
+POST /api/process/async
+```
+
+**响应**：
+```json
+{
+  "success": true,
+  "message": "后台处理任务已启动",
+  "data": {
+    "total": 50,
+    "pending": 30,
+    "skip": 20
+  }
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total | int | 总音频数量 |
+| pending | int | 待处理数量 |
+| skip | int | 已完成/跳过数量 |
+
+---
+
+### 2. 同步处理所有音频
+
+**描述**：同步处理所有 WAV 音频，等待处理完成后返回结果（处理时间较长）
 
 **请求**：
 ```
@@ -43,7 +74,7 @@ POST /api/process
 
 ---
 
-### 2. 查询处理结果
+### 3. 查询处理结果
 
 **描述**：查询指定视频的 ASR 识别结果
 
@@ -181,13 +212,30 @@ GET /docs
 
 当服务部署在 ECS 并对接 api-gateway 时，使用以下路径：
 
-| 功能 | 网关路由 | 说明 |
-|------|----------|------|
-| 处理音频 | `POST /api/douyin/process` | 转发到 /api/process |
-| 查询结果 | `GET /api/douyin/videos/{id}/result` | 转发到 /api/videos/{id}/result |
-| 健康检查 | `GET /api/douyin/health` | 转发到 /health |
+| 功能 | 网关路由 | 后端路由 | 说明 |
+|------|----------|----------|------|
+| 异步处理音频 | `POST /api/douyin/process` | `/api/process/async` | 立即返回，后台处理 |
+| 查询结果 | - | - | 暂未对接（需路径参数支持） |
+| 健康检查 | `GET /api/douyin/health` | `/health` | - |
 
 **网关地址**：`http://your-ecs-ip:8010`
+
+**推荐使用异步接口**：
+```bash
+# 通过网关异步触发（立即返回）
+curl -X POST http://your-ecs-ip:8010/api/douyin/process
+
+# 响应示例
+{
+  "success": true,
+  "message": "后台处理任务已启动",
+  "data": {
+    "total": 50,
+    "pending": 30,
+    "skip": 20
+  }
+}
+```
 
 ---
 
@@ -214,8 +262,14 @@ GET /docs
 ### 使用 curl
 
 ```bash
-# 处理所有音频
+# 异步处理音频（推荐，立即返回）
+curl -X POST http://localhost:8093/api/process/async
+
+# 同步处理音频（等待完成）
 curl -X POST http://localhost:8093/api/process
+
+# 通过网关异步处理
+curl -X POST http://localhost:8010/api/douyin/process
 
 # 查询处理结果
 curl http://localhost:8093/api/videos/7609169800750206794/result
@@ -229,10 +283,17 @@ curl http://localhost:8093/health
 ```python
 import httpx
 
-# 处理音频
+# 异步处理音频（推荐）
+async with httpx.AsyncClient() as client:
+    response = await client.post("http://localhost:8093/api/process/async")
+    result = response.json()
+    # result: {"total": 50, "pending": 30, "skip": 20}
+
+# 同步处理音频（等待完成）
 async with httpx.AsyncClient() as client:
     response = await client.post("http://localhost:8093/api/process")
     result = response.json()
+    # result: {"total": 10, "processed": 10, "success": 8, "failed": 2}
 
 # 查询结果
 response = await client.get("http://localhost:8093/api/videos/7609169800750206794/result")
@@ -242,8 +303,14 @@ result = response.json()
 ### 使用 JavaScript
 
 ```javascript
-// 处理音频
-fetch('http://localhost:8093/api/process', { method: 'POST' })
+// 异步处理音频（推荐）
+fetch('http://localhost:8093/api/process/async', { method: 'POST' })
+  .then(res => res.json())
+  .then(data => console.log(data));
+  // {total: 50, pending: 30, skip: 20}
+
+// 通过网关异步处理
+fetch('http://localhost:8010/api/douyin/process', { method: 'POST' })
   .then(res => res.json())
   .then(data => console.log(data));
 
@@ -259,5 +326,6 @@ fetch('http://localhost:8093/api/videos/7609169800750206794/result')
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| 1.2.0 | 2026-02-28 | 新增异步处理接口 `/api/process/async` |
 | 1.1.0 | 2026-02-28 | 架构调整：直接使用 URL，不下载音频 |
 | 1.0.0 | 2026-02-27 | 初始版本 |
