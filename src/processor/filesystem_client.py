@@ -9,7 +9,7 @@ from typing import Optional, List
 from loguru import logger
 import httpx
 
-from src.models import VideoFile
+from src.models import VideoFile, VideoMetadata
 
 
 class FileSystemClient:
@@ -150,4 +150,59 @@ class FileSystemClient:
 
         except Exception as e:
             logger.error(f"视频下载异常: {e}")
+            return []
+
+    async def get_video_metadata(
+        self,
+        aweme_id: str
+    ) -> Optional[VideoMetadata]:
+        """获取视频元数据
+
+        Args:
+            aweme_id: 视频 ID
+
+        Returns:
+            视频元数据，失败返回 None
+        """
+        # 构建元数据 URL（filename 格式为 {aweme_id}.wav）
+        filename = f"{aweme_id}.wav"
+        metadata_url = f"{self.base_url}/api/metadata/{filename}"
+
+        logger.debug(f"获取视频元数据: {aweme_id}")
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(metadata_url)
+
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # 检查 success 字段
+                    if not data.get("success", False):
+                        logger.warning(f"获取视频元数据失败: {data.get('error', 'Unknown error')}")
+                        return None
+
+                    metadata_data = data.get("metadata", {})
+                    if not metadata_data:
+                        return None
+
+                    return VideoMetadata(
+                        filename=metadata_data.get("filename", filename),
+                        title=metadata_data.get("title", ""),
+                        author=metadata_data.get("author", ""),
+                        description=metadata_data.get("description", ""),
+                        upload_time=metadata_data.get("upload_time", "")
+                    )
+                elif response.status_code == 404:
+                    logger.debug(f"视频元数据不存在: {aweme_id}")
+                    return None
+                else:
+                    logger.warning(
+                        f"获取视频元数据失败: HTTP {response.status_code}, "
+                        f"{response.text}"
+                    )
+                    return None
+
+        except Exception as e:
+            logger.error(f"获取视频元数据异常: {e}")
             return None

@@ -156,7 +156,173 @@ GET /api/videos/{aweme_id}/result
 
 ---
 
-### 3. 健康检查
+### 4. 获取视频列表
+
+**描述**：获取已处理视频列表，支持分页和状态筛选
+
+**请求**：
+```
+GET /api/videos?page=1&page_size=20&status=completed
+```
+
+**查询参数**：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| page | int | 否 | 页码，默认 1 |
+| page_size | int | 否 | 每页数量，默认 20，最大 100 |
+| status | string | 否 | 状态筛选：completed/processing/failed/pending |
+
+**响应**：
+```json
+{
+  "total_count": 150,
+  "videos": [
+    {
+      "aweme_id": "7609169800750206794",
+      "status": "completed",
+      "title": "视频标题",
+      "author": "作者名称",
+      "audio_url": "https://xxx.wav",
+      "transcript": {
+        "text": "完整文本...",
+        "segments": [
+          {"start_time": 0.0, "end_time": 2.5, "text": "第一段", "confidence": 0.95}
+        ],
+        "confidence": 0.92,
+        "audio_duration": 60.5
+      },
+      "processed_at": 1234567890,
+      "upload_time": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "page": 1,
+  "page_size": 20
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total_count | int | 总视频数量 |
+| videos | array | 视频列表 |
+| aweme_id | string | 视频 ID |
+| status | string | 处理状态 |
+| title | string | 视频标题（来自 file-system-go） |
+| author | string | 作者名称（来自 file-system-go） |
+| audio_url | string | 音频文件 URL |
+| transcript | object | 转写结果（仅 completed 状态） |
+| processed_at | int | 处理完成时间戳（仅 completed 状态） |
+| upload_time | string | 上传时间（ISO 8601 格式） |
+| page | int | 当前页码 |
+| page_size | int | 每页数量 |
+
+---
+
+### 5. 获取视频详情
+
+**描述**：获取单个视频的详细信息
+
+**请求**：
+```
+GET /api/videos/{aweme_id}
+```
+
+**路径参数**：
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| aweme_id | string | 视频 ID |
+
+**响应（已完成）**：
+```json
+{
+  "aweme_id": "7609169800750206794",
+  "status": "completed",
+  "title": "视频标题",
+  "author": "作者名称",
+  "description": "视频描述",
+  "audio_url": "https://xxx.wav",
+  "transcript": {
+    "text": "完整文本",
+    "segments": [
+      {"start_time": 0.0, "end_time": 2.5, "text": "第一段", "confidence": 0.95}
+    ],
+    "confidence": 0.92,
+    "audio_duration": 60.5
+  },
+  "processed_at": 1234567890,
+  "upload_time": "2024-01-01T00:00:00Z",
+  "error": null
+}
+```
+
+**响应（处理中）**：
+```json
+{
+  "aweme_id": "7609169800750206794",
+  "status": "processing",
+  "title": "视频标题",
+  "author": "作者名称",
+  "description": "视频描述",
+  "audio_url": "https://xxx.wav",
+  "transcript": null,
+  "processed_at": null,
+  "upload_time": "2024-01-01T00:00:00Z",
+  "error": null
+}
+```
+
+**响应（失败）**：
+```json
+{
+  "aweme_id": "7609169800750206794",
+  "status": "failed",
+  "title": "视频标题",
+  "author": "作者名称",
+  "description": "视频描述",
+  "audio_url": "https://xxx.wav",
+  "transcript": null,
+  "processed_at": null,
+  "upload_time": "2024-01-01T00:00:00Z",
+  "error": "FILE_DOWNLOAD_FAILED"
+}
+```
+
+---
+
+### 6. 获取统计信息
+
+**描述**：获取视频处理统计信息
+
+**请求**：
+```
+GET /api/stats
+```
+
+**响应**：
+```json
+{
+  "total": 150,
+  "completed": 100,
+  "processing": 5,
+  "failed": 10,
+  "pending": 35,
+  "success_rate": 0.91
+}
+```
+
+**字段说明**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| total | int | 总视频数量 |
+| completed | int | 已完成数量 |
+| processing | int | 处理中数量 |
+| failed | int | 失败数量 |
+| pending | int | 待处理数量 |
+| success_rate | float | 成功率（已完成 / (已完成 + 失败)） |
+
+---
+
+### 7. 健康检查
 
 **描述**：检查服务健康状态
 
@@ -197,7 +363,7 @@ GET /
 
 ---
 
-### 5. API 文档
+### 8. API 文档
 
 **描述**：自动生成的 Swagger API 文档
 
@@ -214,27 +380,28 @@ GET /docs
 
 | 功能 | 网关路由 | 后端路由 | 说明 |
 |------|----------|----------|------|
-| 异步处理音频 | `POST /api/douyin/process` | `/api/process/async` | 立即返回，后台处理 |
-| 查询结果 | - | - | 暂未对接（需路径参数支持） |
+| 同步处理音频（前端调用） | `POST /api/douyin/process` | `/api/process` | 等待完成，前端使用 |
+| 异步处理音频（n8n 调用） | - | `/api/process/async` | 立即返回，后台处理 |
+| 获取视频列表 | `GET /api/douyin/videos` | `/api/videos` | 支持分页和状态筛选 |
+| 获取视频详情 | `GET /api/douyin/videos/{aweme_id}` | `/api/videos/{aweme_id}` | 单个视频详情 |
+| 获取统计信息 | `GET /api/douyin/stats` | `/api/stats` | 处理统计数据 |
 | 健康检查 | `GET /api/douyin/health` | `/health` | - |
 
 **网关地址**：`http://your-ecs-ip:8010`
 
-**推荐使用异步接口**：
+**接口使用说明**：
 ```bash
-# 通过网关异步触发（立即返回）
+# 前端调用 - 同步处理（等待完成）
 curl -X POST http://your-ecs-ip:8010/api/douyin/process
 
-# 响应示例
-{
-  "success": true,
-  "message": "后台处理任务已启动",
-  "data": {
-    "total": 50,
-    "pending": 30,
-    "skip": 20
-  }
-}
+# n8n 调用 - 异步处理（立即返回）
+curl -X POST http://your-ecs-ip:8093/api/process/async
+
+# 获取视频列表
+curl "http://your-ecs-ip:8010/api/douyin/videos?page=1&page_size=20"
+
+# 获取统计信息
+curl http://your-ecs-ip:8010/api/douyin/stats
 ```
 
 ---
@@ -271,6 +438,18 @@ curl -X POST http://localhost:8093/api/process
 # 通过网关异步处理
 curl -X POST http://localhost:8010/api/douyin/process
 
+# 获取视频列表
+curl "http://localhost:8093/api/videos?page=1&page_size=20"
+
+# 获取视频列表（仅已完成）
+curl "http://localhost:8093/api/videos?status=completed"
+
+# 获取视频详情
+curl http://localhost:8093/api/videos/7609169800750206794
+
+# 获取统计信息
+curl http://localhost:8093/api/stats
+
 # 查询处理结果
 curl http://localhost:8093/api/videos/7609169800750206794/result
 
@@ -295,9 +474,25 @@ async with httpx.AsyncClient() as client:
     result = response.json()
     # result: {"total": 10, "processed": 10, "success": 8, "failed": 2}
 
-# 查询结果
-response = await client.get("http://localhost:8093/api/videos/7609169800750206794/result")
-result = response.json()
+# 获取视频列表
+async with httpx.AsyncClient() as client:
+    response = await client.get(
+        "http://localhost:8093/api/videos",
+        params={"page": 1, "page_size": 20, "status": "completed"}
+    )
+    result = response.json()
+    # result: {"total_count": 100, "videos": [...], "page": 1, "page_size": 20}
+
+# 获取视频详情
+async with httpx.AsyncClient() as client:
+    response = await client.get("http://localhost:8093/api/videos/7609169800750206794")
+    result = response.json()
+
+# 获取统计信息
+async with httpx.AsyncClient() as client:
+    response = await client.get("http://localhost:8093/api/stats")
+    result = response.json()
+    # result: {"total": 150, "completed": 100, "processing": 5, "failed": 10, "pending": 35, "success_rate": 0.91}
 ```
 
 ### 使用 JavaScript
@@ -314,10 +509,21 @@ fetch('http://localhost:8010/api/douyin/process', { method: 'POST' })
   .then(res => res.json())
   .then(data => console.log(data));
 
-// 查询结果
-fetch('http://localhost:8093/api/videos/7609169800750206794/result')
+// 获取视频列表
+fetch('http://localhost:8093/api/videos?page=1&page_size=20')
   .then(res => res.json())
   .then(data => console.log(data));
+
+// 获取视频详情
+fetch('http://localhost:8093/api/videos/7609169800750206794')
+  .then(res => res.json())
+  .then(data => console.log(data));
+
+// 获取统计信息
+fetch('http://localhost:8093/api/stats')
+  .then(res => res.json())
+  .then(data => console.log(data));
+  // {total: 150, completed: 100, processing: 5, failed: 10, pending: 35, success_rate: 0.91}
 ```
 
 ---
@@ -326,6 +532,8 @@ fetch('http://localhost:8093/api/videos/7609169800750206794/result')
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| 1.4.0 | 2026-02-28 | 对接 personal-web：视频列表/详情从 file-system-go 获取元数据；区分同步/异步处理接口 |
+| 1.3.0 | 2026-02-28 | 新增视频列表、详情、统计接口（对接 personal-web） |
 | 1.2.0 | 2026-02-28 | 新增异步处理接口 `/api/process/async` |
 | 1.1.0 | 2026-02-28 | 架构调整：直接使用 URL，不下载音频 |
 | 1.0.0 | 2026-02-27 | 初始版本 |

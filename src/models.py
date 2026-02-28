@@ -67,3 +67,13 @@ class ProcessResult:
     transcript: Optional[TranscriptResult] = None
     error_message: str = ""
     process_time: float = 0.0
+
+
+@dataclass
+class VideoMetadata:
+    """视频元数据（来自 file-system-go）"""
+    filename: str               # 文件名（如 7609169800750206794.wav）
+    title: str                  # 视频标题
+    author: str                 # 作者名称
+    description: str = ""       # 视频描述
+    upload_time: str = ""       # 上传时间（ISO 8601 格式）
