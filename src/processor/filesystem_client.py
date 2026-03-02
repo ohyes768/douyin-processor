@@ -234,3 +234,33 @@ class FileSystemClient:
         self._video_list_cache = None
         self._video_list_cache_time = 0
         logger.info("视频列表缓存已清除")
+
+    async def delete_video(self, aweme_id: str):
+        """删除视频文件和元数据
+
+        Args:
+            aweme_id: 视频 ID
+        """
+        # filename 格式为 {aweme_id}.wav
+        filename = f"{aweme_id}.wav"
+        delete_url = f"{self.base_url}/api/videos/{filename}"
+
+        logger.info(f"删除视频文件: {aweme_id}")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.delete(delete_url)
+
+                if response.status_code == 200:
+                    logger.info(f"视频文件删除成功: {aweme_id}")
+                    return True
+                else:
+                    logger.error(
+                        f"视频文件删除失败: HTTP {response.status_code}, "
+                        f"{response.text}"
+                    )
+                    return False
+
+        except Exception as e:
+            logger.error(f"视频文件删除异常: {e}")
+            return False

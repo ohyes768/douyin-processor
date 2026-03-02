@@ -628,18 +628,28 @@ async def delete_video(aweme_id: str):
     logger.info(f"删除视频: {aweme_id}")
 
     try:
-        # 从状态文件中移除
+        # 1. 从 file-system-go 删除原始文件（wav 和 meta.json）
+        file_deleted = await processor.filesystem_client.delete_video(aweme_id)
+        if file_deleted:
+            logger.info(f"已删除 file-system-go 上的文件: {aweme_id}")
+        else:
+            logger.warning(f"file-system-go 文件删除失败或不存在: {aweme_id}")
+
+        # 2. 从状态文件中移除
         await processor.status_manager.hard_delete(aweme_id)
 
-        # 删除结果文件（如果存在）
+        # 3. 删除结果文件（如果存在）
         result_file = Path(processor.output_dir) / f"{aweme_id}.json"
         if result_file.exists():
             result_file.unlink()
             logger.info(f"已删除结果文件: {result_file}")
 
+        # 4. 清除视频列表缓存
+        processor.filesystem_client.invalidate_video_list_cache()
+
         return ActionResponse(
             success=True,
-            message="视频已删除"
+            message="视频已完全删除"
         )
     except Exception as e:
         logger.error(f"删除视频失败: {e}")
