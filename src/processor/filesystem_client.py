@@ -4,6 +4,7 @@ file-system-go 客户端
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional, List
 from loguru import logger
@@ -20,7 +21,8 @@ class FileSystemClient:
         base_url: str,
         query_endpoint: str = "/api/videos/query",
         download_endpoint_template: str = "/api/videos/{id}/download",
-        timeout: int = 300
+        timeout: int = 300,
+        cache_ttl: int = 30
     ):
         """初始化客户端
 
@@ -29,26 +31,42 @@ class FileSystemClient:
             query_endpoint: 查询接口路径
             download_endpoint_template: 下载接口路径模板
             timeout: 请求超时时间（秒）
+            cache_ttl: 缓存有效期（秒），默认 30 秒
         """
         self.base_url = base_url.rstrip("/")
         self.query_url = f"{base_url}{query_endpoint}"
         self.download_endpoint_template = download_endpoint_template
         self.timeout = timeout
+        self.cache_ttl = cache_ttl
+
+        # 视频列表缓存
+        self._video_list_cache: Optional[List[VideoFile]] = None
+        self._video_list_cache_time: float = 0
 
         logger.info(f"file-system-go 客户端初始化完成: {base_url}")
 
     async def get_video_list(
         self,
-        filters: dict = None
+        filters: dict = None,
+        use_cache: bool = True
     ) -> List[VideoFile]:
         """获取视频列表
 
         Args:
             filters: 过滤条件，如 {"prefix": "audio", "suffix": ".mp4"}
+            use_cache: 是否使用缓存，默认 True
 
         Returns:
             视频文件列表
         """
+        # 检查缓存是否有效
+        current_time = time.time()
+        if (use_cache and
+            self._video_list_cache is not None and
+            current_time - self._video_list_cache_time < self.cache_ttl):
+            logger.info(f"返回缓存的视频列表（{len(self._video_list_cache)} 个）")
+            return self._video_list_cache.copy()
+
         logger.info("获取视频列表")
 
         # 构建请求体，符合 file-system-go 的格式
@@ -89,6 +107,10 @@ class FileSystemClient:
                             size=item.get("size", 0),
                             url=url
                         ))
+
+                    # 更新缓存
+                    self._video_list_cache = videos
+                    self._video_list_cache_time = current_time
 
                     logger.info(f"获取到 {len(videos)} 个视频")
                     return videos
@@ -206,3 +228,9 @@ class FileSystemClient:
         except Exception as e:
             logger.error(f"获取视频元数据异常: {e}")
             return None
+
+    def invalidate_video_list_cache(self):
+        """清除视频列表缓存"""
+        self._video_list_cache = None
+        self._video_list_cache_time = 0
+        logger.info("视频列表缓存已清除")

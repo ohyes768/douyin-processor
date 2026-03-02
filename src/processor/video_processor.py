@@ -142,7 +142,9 @@ class VideoProcessor:
 
             # 保存结果
             if transcript:
-                await self._save_result(aweme_id, transcript)
+                # 获取元数据（从 file-system-go）
+                metadata = await self.filesystem_client.get_video_metadata(aweme_id)
+                await self._save_result(aweme_id, transcript, metadata)
                 await self.status_manager.mark_completed(aweme_id)
 
                 process_time = time.time() - start_time
@@ -180,13 +182,15 @@ class VideoProcessor:
     async def _save_result(
         self,
         aweme_id: str,
-        transcript: TranscriptResult
+        transcript: TranscriptResult,
+        metadata = None
     ):
         """保存识别结果
 
         Args:
             aweme_id: 视频 ID
             transcript: 识别结果
+            metadata: 视频元数据（可选）
         """
         output_file = self.output_dir / f"{aweme_id}.json"
 
@@ -206,6 +210,15 @@ class VideoProcessor:
             "confidence": transcript.confidence,
             "audio_duration": transcript.audio_duration
         }
+
+        # 添加元数据信息
+        if metadata:
+            output_data.update({
+                "title": metadata.title,
+                "author": metadata.author,
+                "description": metadata.description,
+                "upload_time": metadata.upload_time
+            })
 
         # 保存为 JSON 文件
         save_json(output_data, str(output_file))

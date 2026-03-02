@@ -44,7 +44,8 @@ async def lifespan(app: FastAPI):
         base_url=filesystem_config.get("base_url", ""),
         query_endpoint=filesystem_config.get("query_endpoint", "/api/videos/query"),
         download_endpoint_template=filesystem_config.get("download_endpoint_template", "/api/videos/{id}/download"),
-        timeout=filesystem_config.get("timeout", 300)
+        timeout=filesystem_config.get("timeout", 300),
+        cache_ttl=filesystem_config.get("cache_ttl", 30)
     )
 
     asr_config = app_config.get("asr", {})

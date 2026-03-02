@@ -63,6 +63,8 @@ class VideoListItem(BaseModel):
     transcript: Optional[TranscriptInfo] = None
     processed_at: Optional[int] = None
     upload_time: Optional[str] = None
+    is_read: bool = False
+    read_at: Optional[int] = None
 
 
 class VideoListResponse(BaseModel):
@@ -85,6 +87,8 @@ class VideoDetailResponse(BaseModel):
     processed_at: Optional[int] = None
     upload_time: Optional[str] = None
     error: Optional[str] = None
+    is_read: bool = False
+    read_at: Optional[int] = None
 
 
 class StatsResponse(BaseModel):
@@ -97,6 +101,17 @@ class StatsResponse(BaseModel):
     success_rate: float
 
 
+class MarkReadRequest(BaseModel):
+    """标记已读请求"""
+    is_read: bool
+
+
+class ActionResponse(BaseModel):
+    """操作响应"""
+    success: bool
+    message: str
+
+
 @router.post("/api/process/async", response_model=TaskResponse)
 async def process_videos_async():
     """异步处理所有音频（立即返回，后台处理）"""
@@ -106,9 +121,10 @@ async def process_videos_async():
     logger.info("接收到异步处理请求")
 
     try:
-        # 获取音频列表统计
+        # 获取音频列表（带缓存）
         videos = await processor.filesystem_client.get_video_list(
-            filters={"suffix": ".wav"}
+            filters={"suffix": ".wav"},
+            use_cache=True
         )
 
         if not videos:
@@ -121,8 +137,10 @@ async def process_videos_async():
         # 统计待处理数量
         pending_count = 0
         skip_count = 0
+        all_statuses = await processor.status_manager.get_all_statuses()
         for video in videos:
-            status = await processor.status_manager.get_status(video.aweme_id)
+            status_data = all_statuses.get(video.aweme_id, {})
+            status = status_data.get("status")
             if status is None:
                 pending_count += 1
             else:
@@ -243,81 +261,163 @@ async def get_video_result(aweme_id: str):
 async def get_videos(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    status: Optional[str] = Query(None, description="状态筛选: completed/processing/failed/pending")
+    status: Optional[str] = Query(None, description="状态筛选: completed/processing/failed/pending"),
+    is_read: Optional[bool] = Query(None, description="已读状态筛选")
 ):
     """获取视频列表（支持分页和状态筛选）"""
     if processor is None:
         raise HTTPException(status_code=500, detail="处理器未初始化")
 
-    logger.info(f"获取视频列表: page={page}, page_size={page_size}, status={status}")
+    logger.info(f"获取视频列表: page={page}, page_size={page_size}, status={status}, is_read={is_read}")
 
     try:
-        # 获取所有视频
+        # 获取所有视频（使用缓存）
         all_videos = await processor.filesystem_client.get_video_list(
-            filters={"suffix": ".wav"}
+            filters={"suffix": ".wav"},
+            use_cache=True
         )
 
         # 获取所有状态
         all_statuses = await processor.status_manager.get_all_statuses()
 
-        # 构建视频列表
-        video_list = []
-
+        # 第一遍：快速筛选（只读内存数据）
+        candidate_videos = []
         for video in all_videos:
             aweme_id = video.aweme_id
+            status_data = all_statuses.get(aweme_id, {})
+            video_status = status_data.get("status", "pending")
+            video_is_read = status_data.get("is_read", False)
 
-            # 获取状态
-            video_status = all_statuses.get(aweme_id, {}).get("status", "pending")
+            # 默认过滤掉 pending 状态的视频
+            if video_status == "pending":
+                continue
 
             # 状态筛选
             if status and video_status != status:
                 continue
 
-            # 获取元数据
-            metadata = await processor.filesystem_client.get_video_metadata(aweme_id)
+            # 已读状态筛选
+            if is_read is not None and video_is_read != is_read:
+                continue
 
-            # 读取转写结果（仅已完成且有结果文件）
+            candidate_videos.append({
+                "aweme_id": aweme_id,
+                "status": video_status,
+                "is_read": video_is_read,
+                "audio_url": video.url,
+                "status_data": status_data
+            })
+
+        # 按上传时间倒序排序（先读取 upload_time）
+        for v in candidate_videos:
+            aweme_id = v["aweme_id"]
+            # 尝试从 output 文件读取 upload_time
+            result_file = processor.output_dir / f"{aweme_id}.json"
+            if result_file.exists():
+                try:
+                    result_data = load_json(str(result_file))
+                    v["upload_time"] = result_data.get("upload_time", "")
+                except:
+                    v["upload_time"] = ""
+            else:
+                v["upload_time"] = ""
+
+        # 分成两组：有时间的和没时间的
+        with_time = [v for v in candidate_videos if v["upload_time"]]
+        without_time = [v for v in candidate_videos if not v["upload_time"]]
+
+        # 有时间的按时间倒序
+        with_time.sort(key=lambda x: x["upload_time"], reverse=True)
+        # 没时间的按 ID 倒序
+        without_time.sort(key=lambda x: x["aweme_id"], reverse=True)
+
+        # 合并
+        candidate_videos = with_time + without_time
+
+        # 分页处理
+        total_count = len(candidate_videos)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        page_videos = candidate_videos[start_idx:end_idx]
+
+        # 只读取当前页需要的文件数据
+        video_list = []
+        for v in page_videos:
+            aweme_id = v["aweme_id"]
+            video_status = v["status"]
+            status_data = v["status_data"]
+
+            # 默认值
+            metadata = {"title": "", "author": "", "description": "", "upload_time": None}
             transcript = None
             processed_at = None
+            read_at = None
 
+            # 读取转写结果（仅已完成且有结果文件）
             if video_status == "completed":
                 result_file = processor.output_dir / f"{aweme_id}.json"
                 if result_file.exists():
                     result_data = load_json(str(result_file))
+
+                    # 从结果文件获取 metadata（优先）
+                    if result_data.get("title"):
+                        metadata = {
+                            "title": result_data.get("title", ""),
+                            "author": result_data.get("author", ""),
+                            "description": result_data.get("description", ""),
+                            "upload_time": result_data.get("upload_time")
+                        }
+
                     transcript = TranscriptInfo(
                         text=result_data.get("text", ""),
                         segments=result_data.get("segments"),
                         confidence=result_data.get("confidence", 0.0),
                         audio_duration=result_data.get("audio_duration", 0.0)
                     )
+
                     # 从状态文件获取处理时间
-                    processed_at_str = all_statuses.get(aweme_id, {}).get("updated_at", "")
+                    processed_at_str = status_data.get("updated_at", "")
                     if processed_at_str:
                         try:
                             processed_at = int(datetime.fromisoformat(processed_at_str).timestamp())
                         except:
                             pass
 
+            # 如果结果文件没有 metadata，从 file-system-go 获取
+            if not metadata["title"]:
+                md = await processor.filesystem_client.get_video_metadata(aweme_id)
+                if md:
+                    metadata = {
+                        "title": md.title,
+                        "author": md.author,
+                        "description": md.description,
+                        "upload_time": md.upload_time
+                    }
+
+            # 获取已读时间
+            read_at_str = status_data.get("read_at")
+            if read_at_str:
+                try:
+                    read_at = int(datetime.fromisoformat(read_at_str).timestamp())
+                except:
+                    pass
+
             video_list.append(VideoListItem(
                 aweme_id=aweme_id,
                 status=video_status,
-                title=metadata.title if metadata else "",
-                author=metadata.author if metadata else "",
-                audio_url=video.url,
+                title=metadata.get("title", ""),
+                author=metadata.get("author", ""),
+                audio_url=v["audio_url"],
                 transcript=transcript,
                 processed_at=processed_at,
-                upload_time=metadata.upload_time if metadata else None
+                upload_time=metadata.get("upload_time"),
+                is_read=v["is_read"],
+                read_at=read_at
             ))
-
-        # 分页处理
-        total_count = len(video_list)
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        paginated_videos = video_list[start_idx:end_idx]
 
         return VideoListResponse(
             total_count=total_count,
-            videos=paginated_videos,
+            videos=video_list,
             page=page,
             page_size=page_size
         )
@@ -344,12 +444,20 @@ async def get_video_detail(aweme_id: str):
         all_statuses = await processor.status_manager.get_all_statuses()
         status_data = all_statuses.get(aweme_id, {})
 
-        # 获取元数据
-        metadata = await processor.filesystem_client.get_video_metadata(aweme_id)
+        # 获取已读状态
+        is_read = status_data.get("is_read", False)
+        read_at = None
+        read_at_str = status_data.get("read_at")
+        if read_at_str:
+            try:
+                read_at = int(datetime.fromisoformat(read_at_str).timestamp())
+            except:
+                pass
 
-        # 获取音频 URL
+        # 获取音频 URL（使用缓存）
         videos = await processor.filesystem_client.get_video_list(
-            filters={"suffix": ".wav"}
+            filters={"suffix": ".wav"},
+            use_cache=True
         )
         audio_url = ""
         for video in videos:
@@ -357,10 +465,14 @@ async def get_video_detail(aweme_id: str):
                 audio_url = video.url
                 break
 
-        # 读取转写结果（仅已完成）
+        # 读取转写结果和 metadata（仅已完成）
         transcript = None
         processed_at = None
         error = None
+        title = ""
+        author = ""
+        description = ""
+        upload_time = None
 
         if video_status == "completed":
             result_file = processor.output_dir / f"{aweme_id}.json"
@@ -372,6 +484,12 @@ async def get_video_detail(aweme_id: str):
                     confidence=result_data.get("confidence", 0.0),
                     audio_duration=result_data.get("audio_duration", 0.0)
                 )
+                # 从结果文件获取 metadata（优先）
+                title = result_data.get("title", "")
+                author = result_data.get("author", "")
+                description = result_data.get("description", "")
+                upload_time = result_data.get("upload_time")
+
                 # 获取处理时间
                 processed_at_str = status_data.get("updated_at", "")
                 if processed_at_str:
@@ -382,17 +500,28 @@ async def get_video_detail(aweme_id: str):
         elif video_status == "failed":
             error = status_data.get("error", "未知错误")
 
+        # 如果结果文件没有 metadata，从 file-system-go 获取
+        if not title:
+            metadata = await processor.filesystem_client.get_video_metadata(aweme_id)
+            if metadata:
+                title = metadata.title
+                author = metadata.author
+                description = metadata.description
+                upload_time = metadata.upload_time
+
         return VideoDetailResponse(
             aweme_id=aweme_id,
             status=video_status,
-            title=metadata.title if metadata else "",
-            author=metadata.author if metadata else "",
-            description=metadata.description if metadata else "",
+            title=title,
+            author=author,
+            description=description,
             audio_url=audio_url,
             transcript=transcript,
             processed_at=processed_at,
-            upload_time=metadata.upload_time if metadata else None,
-            error=error
+            upload_time=upload_time,
+            error=error,
+            is_read=is_read,
+            read_at=read_at
         )
 
     except Exception as e:
@@ -409,23 +538,26 @@ async def get_stats():
     logger.info("获取统计信息")
 
     try:
-        # 获取所有视频
+        # 从 file-system-go 获取所有视频列表（带缓存）
         all_videos = await processor.filesystem_client.get_video_list(
-            filters={"suffix": ".wav"}
+            filters={"suffix": ".wav"},
+            use_cache=True
         )
 
-        total = len(all_videos)
-
-        # 获取所有状态
+        # 从 status_manager 获取所有状态
         all_statuses = await processor.status_manager.get_all_statuses()
 
+        # 统计各状态数量
         completed = 0
         processing = 0
         failed = 0
         pending = 0
 
+        # 遍历所有实际视频，判断其处理状态
         for video in all_videos:
-            status = all_statuses.get(video.aweme_id, {}).get("status", "pending")
+            aweme_id = video.aweme_id
+            status_data = all_statuses.get(aweme_id, {})
+            status = status_data.get("status", "pending")
 
             if status == "completed":
                 completed += 1
@@ -435,6 +567,9 @@ async def get_stats():
                 failed += 1
             else:
                 pending += 1
+
+        # 计算总数
+        total = len(all_videos)
 
         # 计算成功率
         success_rate = 0.0
@@ -463,3 +598,49 @@ async def health_check():
         "version": "1.0.0",
         "processor_ready": processor is not None
     }
+
+
+@router.post("/api/videos/{aweme_id}/read", response_model=ActionResponse)
+async def mark_video_read(aweme_id: str, request: MarkReadRequest):
+    """标记视频已读/未读"""
+    if processor is None:
+        raise HTTPException(status_code=500, detail="处理器未初始化")
+
+    logger.info(f"标记视频已读状态: {aweme_id}, is_read={request.is_read}")
+
+    try:
+        await processor.status_manager.mark_read(aweme_id, request.is_read)
+        return ActionResponse(
+            success=True,
+            message=f"已{'标记已读' if request.is_read else '标记未读'}"
+        )
+    except Exception as e:
+        logger.error(f"标记已读失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/videos/{aweme_id}", response_model=ActionResponse)
+async def delete_video(aweme_id: str):
+    """硬删除视频（无法恢复）"""
+    if processor is None:
+        raise HTTPException(status_code=500, detail="处理器未初始化")
+
+    logger.info(f"删除视频: {aweme_id}")
+
+    try:
+        # 从状态文件中移除
+        await processor.status_manager.hard_delete(aweme_id)
+
+        # 删除结果文件（如果存在）
+        result_file = Path(processor.output_dir) / f"{aweme_id}.json"
+        if result_file.exists():
+            result_file.unlink()
+            logger.info(f"已删除结果文件: {result_file}")
+
+        return ActionResponse(
+            success=True,
+            message="视频已删除"
+        )
+    except Exception as e:
+        logger.error(f"删除视频失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

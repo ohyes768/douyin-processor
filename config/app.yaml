@@ -9,6 +9,7 @@ app:
     base_url: "http://120.26.218.136:8000"
     query_endpoint: "/api/videos/query"
     timeout: 30
+    cache_ttl: 30  # 视频列表缓存有效期（秒）
 
   # 文件配置
   files:

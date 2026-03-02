@@ -126,3 +126,57 @@ class StatusManager:
         """获取所有视频状态"""
         async with self._lock:
             return self._data.get("videos", {}).copy()
+
+    async def mark_read(self, aweme_id: str, is_read: bool = True):
+        """标记视频已读/未读
+
+        Args:
+            aweme_id: 视频 ID
+            is_read: 是否已读
+        """
+        async with self._lock:
+            now = datetime.now().isoformat()
+
+            if aweme_id not in self._data.get("videos", {}):
+                self._data.setdefault("videos", {})[aweme_id] = {
+                    "created_at": now
+                }
+
+            if is_read:
+                self._data["videos"][aweme_id]["is_read"] = True
+                self._data["videos"][aweme_id]["read_at"] = now
+            else:
+                self._data["videos"][aweme_id]["is_read"] = False
+                self._data["videos"][aweme_id]["read_at"] = None
+
+            self._save()
+            logger.info(f"视频 {aweme_id} 已标记为 {'已读' if is_read else '未读'}")
+
+    async def hard_delete(self, aweme_id: str):
+        """硬删除视频（从状态文件移除）
+
+        Args:
+            aweme_id: 视频 ID
+        """
+        async with self._lock:
+            videos = self._data.get("videos", {})
+            if aweme_id in videos:
+                del videos[aweme_id]
+                self._save()
+                logger.info(f"视频 {aweme_id} 已从状态文件中删除")
+
+    async def get_read_status(self, aweme_id: str) -> dict:
+        """获取视频已读/收藏状态
+
+        Args:
+            aweme_id: 视频 ID
+
+        Returns:
+            包含 is_read 和 read_at 的字典
+        """
+        async with self._lock:
+            video_data = self._data.get("videos", {}).get(aweme_id, {})
+            return {
+                "is_read": video_data.get("is_read", False),
+                "read_at": video_data.get("read_at")
+            }
