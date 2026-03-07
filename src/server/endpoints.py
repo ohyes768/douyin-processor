@@ -610,6 +610,12 @@ async def mark_video_read(aweme_id: str, request: MarkReadRequest):
 
     try:
         await processor.status_manager.mark_read(aweme_id, request.is_read)
+
+        # 标记已读时同步记录到 file-system-go
+        if request.is_read:
+            filename = f"{aweme_id}.wav"
+            await processor.filesystem_client.mark_read(filename)
+
         return ActionResponse(
             success=True,
             message=f"已{'标记已读' if request.is_read else '标记未读'}"
@@ -620,20 +626,27 @@ async def mark_video_read(aweme_id: str, request: MarkReadRequest):
 
 
 @router.delete("/api/videos/{aweme_id}", response_model=ActionResponse)
-async def delete_video(aweme_id: str):
-    """硬删除视频（无法恢复）"""
+async def delete_video(aweme_id: str, keep_file: bool = False):
+    """取消收藏视频
+
+    Args:
+        aweme_id: 视频 ID
+        keep_file: 是否保留原始文件（仅删除本地记录），默认 False
+    """
     if processor is None:
         raise HTTPException(status_code=500, detail="处理器未初始化")
 
-    logger.info(f"删除视频: {aweme_id}")
+    action = "删除记录" if keep_file else "取消收藏视频"
+    logger.info(f"{action}: {aweme_id}")
 
     try:
-        # 1. 从 file-system-go 删除原始文件（wav 和 meta.json）
-        file_deleted = await processor.filesystem_client.delete_video(aweme_id)
-        if file_deleted:
-            logger.info(f"已删除 file-system-go 上的文件: {aweme_id}")
-        else:
-            logger.warning(f"file-system-go 文件删除失败或不存在: {aweme_id}")
+        # 1. 如果不保留文件，则从 file-system-go 删除原始文件
+        if not keep_file:
+            file_deleted = await processor.filesystem_client.delete_video(aweme_id)
+            if file_deleted:
+                logger.info(f"已删除 file-system-go 上的文件: {aweme_id}")
+            else:
+                logger.warning(f"file-system-go 文件删除失败或不存在: {aweme_id}")
 
         # 2. 从状态文件中移除
         await processor.status_manager.hard_delete(aweme_id)
@@ -649,8 +662,8 @@ async def delete_video(aweme_id: str):
 
         return ActionResponse(
             success=True,
-            message="视频已完全删除"
+            message="已删除记录" if keep_file else "已取消收藏"
         )
     except Exception as e:
-        logger.error(f"删除视频失败: {e}")
+        logger.error(f"{action}失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

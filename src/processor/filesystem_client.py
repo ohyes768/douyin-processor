@@ -264,3 +264,42 @@ class FileSystemClient:
         except Exception as e:
             logger.error(f"视频文件删除异常: {e}")
             return False
+
+    async def mark_read(self, filename: str) -> bool:
+        """标记文件为已读
+
+        Args:
+            filename: 文件名，如 "xxx.wav"
+
+        Returns:
+            标记成功返回 True，失败返回 False
+        """
+        url = f"{self.base_url}/api/read/mark"
+
+        logger.info(f"标记文件为已读: {filename}")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    json={"filename": filename}
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success", False):
+                        logger.info(f"文件已标记为已读: {filename}")
+                        return True
+                    else:
+                        logger.error(f"标记已读失败: {data.get('error', 'Unknown error')}")
+                        return False
+                else:
+                    logger.error(
+                        f"标记已读失败: HTTP {response.status_code}, "
+                        f"{response.text}"
+                    )
+                    return False
+
+        except Exception as e:
+            logger.error(f"标记已读异常: {e}")
+            return False
